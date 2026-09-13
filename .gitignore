@@ -1,6 +1,8 @@
 # CMake build outputs
 /build/
+/build-*/
 /cmake-build-*/
+/models/
 
 # Default local meeting-data directory (may contain sensitive recordings)
 /meetflow-meetings/

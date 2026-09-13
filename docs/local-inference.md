@@ -34,4 +34,23 @@ The runtime and models are intentionally separate:
 
 `meetflow-prepare` will receive a model directory explicitly. The application will record model names, versions, and checksums in each meeting manifest so that reprocessing is reproducible.
 
+Use this directory layout for the current CLI:
+
+```text
+models/
+├── whisper/
+│   ├── encoder.int8.onnx
+│   ├── decoder.int8.onnx
+│   └── tokens.txt
+└── diarization/
+    ├── segmentation.onnx
+    └── embedding.onnx
+```
+
+Run inference with:
+
+```sh
+meetflow-prepare recording.m4a --models /absolute/path/to/models
+```
+
 No audio, transcript, or derived meeting content is sent to a model host or cloud service.
