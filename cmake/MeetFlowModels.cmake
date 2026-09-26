@@ -95,3 +95,22 @@ function(meetflow_prepare_models models_directory)
   _meetflow_download("${MEETFLOW_DIARIZATION_EMBEDDING_URL}" "${embedding_model}")
   message(STATUS "MeetFlow models are ready in ${models_directory}")
 endfunction()
+
+function(meetflow_check_whisper_model models_directory)
+  set(missing_files)
+  foreach(model_file IN ITEMS encoder.int8.onnx decoder.int8.onnx tokens.txt)
+    if(NOT EXISTS "${models_directory}/whisper/${model_file}")
+      list(APPEND missing_files "whisper/${model_file}")
+    endif()
+  endforeach()
+
+  if(missing_files)
+    string(JOIN ", " missing_list ${missing_files})
+    message(WARNING
+      "MeetFlow Whisper model is incomplete in ${models_directory}: ${missing_list}. "
+      "Use -DMEETFLOW_DOWNLOAD_MODELS=ON to download missing files, or provide "
+      "the model directory with --models when running meetflow-prepare.")
+  else()
+    message(STATUS "MeetFlow Whisper model found in ${models_directory}/whisper")
+  endif()
+endfunction()

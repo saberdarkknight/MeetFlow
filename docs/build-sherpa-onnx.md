@@ -107,6 +107,8 @@ Pass the same directory to the preparation command:
 
 Keep `MEETFLOW_DOWNLOAD_MODELS=OFF` for offline builds and provide the model directory yourself. Model downloads happen at configure time, not when compiling or running MeetFlow.
 
+When Sherpa-ONNX is enabled without downloads, CMake checks the configured `MEETFLOW_MODELS_DIR` and warns if any Whisper file is missing. This warning does not block an offline build because `meetflow-prepare` can receive a different directory through its `--models` option.
+
 ## Removing files
 
 After a successful installation, the cloned Sherpa-ONNX source tree and its `build/` directory are disposable. Keep the installed runtime and model directory while you want MeetFlow's inference features to work. Deleting either is safe for the repository, but `meetflow-prepare` will no longer be able to transcribe or diarize until they are restored.

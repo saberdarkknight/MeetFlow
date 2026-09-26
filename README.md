@@ -6,7 +6,7 @@ MeetFlow turns an audio recording from an in-person meeting into a reviewable tr
 
 It is initially a personal command-line tool for an Apple Silicon MacBook Air. Record a meeting in Apple Notes on an iPhone, AirDrop the exported audio to your Mac, and process it locally.
 
-> **Project status:** Early development. The command-line tools and data formats described below are the intended v1 design; they are not implemented yet.
+> **Project status:** Early development. The local command-line workflow is implemented; transcription and diarization require the optional Sherpa-ONNX runtime and model files.
 
 ## Why MeetFlow?
 
@@ -58,7 +58,68 @@ Apple Notes recording on iPhone
 
 MeetFlow is deliberately split into three local executables. This keeps the source audio and human review points separate from LLM-generated drafts, and will let a future GUI reuse the same meeting data.
 
-## Planned executables
+## Quick start: audio to final minutes
+
+Build the command-line tools:
+
+```sh
+cmake -S . -B build
+cmake --build build --parallel
+```
+
+For local transcription and speaker diarization, follow [the Sherpa-ONNX build guide](docs/build-sherpa-onnx.md), then configure MeetFlow with the native runtime and model downloads enabled:
+
+```sh
+cmake -S . -B build-sherpa \
+  -DMEETFLOW_ENABLE_SHERPA_ONNX=ON \
+  -DMEETFLOW_SHERPA_ONNX_ROOT="$HOME/Library/Application Support/MeetFlow/runtime/sherpa-onnx" \
+  -DMEETFLOW_DOWNLOAD_MODELS=ON \
+  -DMEETFLOW_MODELS_DIR="$HOME/Library/Application Support/MeetFlow/models"
+cmake --build build-sherpa --parallel
+```
+
+Prepare an exported iPhone/Apple Notes recording. The original audio is preserved, while a normalized working copy and processing artifacts are created in the meeting directory:
+
+```sh
+./build-sherpa/bin/meetflow-prepare \
+  "$HOME/Downloads/meeting.m4a" \
+  --output "$PWD/meetflow-meetings/meeting-2026-09-13" \
+  --models "$HOME/Library/Application Support/MeetFlow/models"
+```
+
+If you are only testing the file-import and artifact pipeline without local inference, omit `--models` and use the regular `build/bin/meetflow-prepare` executable.
+
+Review the generated speaker labels and draft:
+
+```sh
+./build-sherpa/bin/meetflow-draft \
+  "$PWD/meetflow-meetings/meeting-2026-09-13"
+```
+
+Edit these files before finalization:
+
+```text
+meetflow-meetings/meeting-2026-09-13/speakers.yaml
+meetflow-meetings/meeting-2026-09-13/draft/minutes.draft.md
+meetflow-meetings/meeting-2026-09-13/draft/action-items.yaml
+```
+
+Change reviewed action items from `needs_review` to `confirmed`. Only confirmed items are included in the final output:
+
+```sh
+./build-sherpa/bin/meetflow-finalize \
+  "$PWD/meetflow-meetings/meeting-2026-09-13"
+```
+
+The approved Markdown minutes are written to:
+
+```text
+meetflow-meetings/meeting-2026-09-13/final/minutes.md
+```
+
+You can open or share that Markdown file without exposing the original audio or intermediate artifacts.
+
+## Command-line executables
 
 | Executable | Purpose | Inputs | Outputs |
 | --- | --- | --- | --- |
@@ -66,7 +127,7 @@ MeetFlow is deliberately split into three local executables. This keeps the sour
 | `meetflow-draft` | Generate reviewable minutes from a speaker-reviewed transcript. | Prepared meeting + `speakers.yaml` | Named transcript, draft minutes, `action-items.yaml` |
 | `meetflow-finalize` | Produce the approved minutes deterministically. | Reviewed `action-items.yaml` | `minutes.md` |
 
-Each stage will validate the meeting ID, artifact versions, and input hashes before proceeding. Regeneration creates a new draft and must never silently overwrite approved minutes.
+The prepare stage records the source and processing metadata. Draft and finalize operate on the meeting directory and keep human review explicit: only action items marked `confirmed` are exported to final minutes.
 
 ## Meeting workspace layout
 

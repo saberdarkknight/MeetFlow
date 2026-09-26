@@ -11,3 +11,7 @@
 .DS_Store
 .idea/
 .vscode/
+
+
+# input source file
+/Audio/
