@@ -153,6 +153,27 @@ std::filesystem::path default_output_directory(std::string_view timestamp) {
          ("meeting-" + std::string{timestamp});
 }
 
+void validate_model_directory(const std::filesystem::path& models) {
+  const std::array<std::filesystem::path, 5> required{
+      models / "whisper/encoder.int8.onnx",
+      models / "whisper/decoder.int8.onnx",
+      models / "whisper/tokens.txt",
+      models / "diarization/segmentation.onnx",
+      models / "diarization/embedding.onnx"};
+  std::vector<std::string> missing;
+  for (const auto& path : required) {
+    if (!std::filesystem::is_regular_file(path)) missing.push_back(path.string());
+  }
+  if (!missing.empty()) {
+    std::ostringstream message;
+    message << "model files are missing from " << models << ". Expected:\n";
+    for (const auto& path : missing) message << "  - " << path << "\n";
+    message << "Run CMake with -DMEETFLOW_DOWNLOAD_MODELS=ON or provide a complete "
+                "directory with --models.";
+    throw std::runtime_error(message.str());
+  }
+}
+
 std::string os_status_message(std::string_view operation, OSStatus status) {
   return std::string{operation} + " failed (OSStatus " + std::to_string(status) + ")";
 }
@@ -316,6 +337,35 @@ struct DiarizationSegment {
   std::optional<double> confidence;
 };
 
+void write_speaker_clips(const std::filesystem::path& directory,
+                         const std::vector<float>& samples,
+                         const std::vector<DiarizationSegment>& segments) {
+  std::map<std::string, std::vector<std::int16_t>> clips;
+  for (const auto& segment : segments) {
+    const auto start = std::min(samples.size(), static_cast<std::size_t>(
+        std::max(0.0, segment.start_seconds) * kTargetSampleRate));
+    const auto end = std::min(samples.size(), static_cast<std::size_t>(
+        std::max(segment.start_seconds, segment.end_seconds) * kTargetSampleRate));
+    auto& clip = clips[segment.speaker];
+    for (std::size_t index = start; index < end; ++index) {
+      const float sample = std::clamp(samples[index], -1.0F, 1.0F);
+      clip.push_back(sample <= -1.0F ? std::numeric_limits<std::int16_t>::min()
+                                     : static_cast<std::int16_t>(sample * 32767.0F));
+    }
+  }
+  std::filesystem::create_directories(directory);
+  for (const auto& [speaker, clip] : clips) {
+    if (clip.empty()) continue;
+    const auto path = directory / (speaker + ".wav");
+    std::ofstream output{path, std::ios::binary | std::ios::trunc};
+    if (!output) throw std::runtime_error("cannot create speaker audio: " + path.string());
+    const auto header = wave_header(static_cast<std::uint32_t>(clip.size() * 2U));
+    output.write(header.data(), static_cast<std::streamsize>(header.size()));
+    output.write(reinterpret_cast<const char*>(clip.data()),
+                 static_cast<std::streamsize>(clip.size() * sizeof(std::int16_t)));
+  }
+}
+
 struct InferenceArtifacts {
   std::string transcript_json;
   std::string diarization_json;
@@ -451,7 +501,8 @@ std::string json_number(double value) {
 }
 
 InferenceArtifacts run_local_inference(const std::filesystem::path& models,
-                                      const std::filesystem::path& normalized_audio) {
+                                      const std::filesystem::path& normalized_audio,
+                                      const std::filesystem::path& speaker_audio_directory) {
   const auto whisper_encoder = required_model_file(models, "whisper/encoder.int8.onnx");
   const auto whisper_decoder = required_model_file(models, "whisper/decoder.int8.onnx");
   const auto whisper_tokens = required_model_file(models, "whisper/tokens.txt");
@@ -469,17 +520,41 @@ InferenceArtifacts run_local_inference(const std::filesystem::path& models,
   // An empty Whisper language lets Sherpa-ONNX detect the spoken language.
   recognizer_config.model_config.whisper.language.clear();
   recognizer_config.model_config.whisper.task = "transcribe";
-  recognizer_config.model_config.whisper.enable_token_timestamps = true;
-  recognizer_config.model_config.whisper.enable_segment_timestamps = true;
+  // The bundled tiny model has no cross-attention outputs, so token timestamps
+  // are unavailable. Chunk timestamps below provide reliable coarse ranges.
+  recognizer_config.model_config.whisper.enable_token_timestamps = false;
+  recognizer_config.model_config.whisper.enable_segment_timestamps = false;
   recognizer_config.model_config.tokens = whisper_tokens.string();
   recognizer_config.model_config.num_threads = 4;
 
   auto recognizer = sherpa_onnx::cxx::OfflineRecognizer::Create(recognizer_config);
-  auto stream = recognizer.CreateStream();
-  stream.AcceptWaveform(wave.sample_rate, wave.samples.data(),
-                        static_cast<int32_t>(wave.samples.size()));
-  recognizer.Decode(&stream);
-  const auto recognition = recognizer.GetResult(&stream);
+  // Whisper accepts at most 30 seconds per stream. Use a smaller overlap-free
+  // window so long recordings are processed completely instead of truncated.
+  constexpr std::size_t kWhisperChunkSeconds = 25;
+  const std::size_t chunk_samples = kWhisperChunkSeconds * kTargetSampleRate;
+  std::vector<TranscriptSegment> transcript_segments;
+  std::string detected_language;
+  std::size_t segment_number = 1;
+  for (std::size_t offset = 0; offset < wave.samples.size(); offset += chunk_samples) {
+    const std::size_t sample_count = std::min(chunk_samples, wave.samples.size() - offset);
+    auto stream = recognizer.CreateStream();
+    stream.AcceptWaveform(wave.sample_rate, wave.samples.data() + offset,
+                          static_cast<int32_t>(sample_count));
+    recognizer.Decode(&stream);
+    const auto recognition = recognizer.GetResult(&stream);
+    if (detected_language.empty()) detected_language = recognition.lang;
+    const double chunk_start = static_cast<double>(offset) / wave.sample_rate;
+    const double chunk_end = static_cast<double>(offset + sample_count) / wave.sample_rate;
+    if (!recognition.text.empty()) {
+      transcript_segments.push_back({
+          .id = "seg_" + [&] { std::ostringstream id; id << std::setw(4) << std::setfill('0') << segment_number++; return id.str(); }(),
+          .start_seconds = chunk_start,
+          .end_seconds = chunk_end,
+          .speaker = "Unknown",
+          .text = recognition.text,
+      });
+    }
+  }
 
   sherpa_onnx::cxx::OfflineSpeakerDiarizationConfig diarization_config;
   diarization_config.segmentation.pyannote.model = segmentation.string();
@@ -504,31 +579,11 @@ InferenceArtifacts run_local_inference(const std::filesystem::path& models,
                           : std::optional<double>{segment.confidence},
     });
   }
+  write_speaker_clips(speaker_audio_directory, wave.samples, diarization_segments);
 
-  const double duration_seconds = static_cast<double>(wave.samples.size()) / wave.sample_rate;
-  std::vector<TranscriptSegment> transcript_segments;
-  if (recognition.tokens.size() == recognition.timestamps.size() && !recognition.tokens.empty()) {
-    for (std::size_t index = 0; index < recognition.tokens.size(); ++index) {
-      const double start = recognition.timestamps[index];
-      const double end = index + 1 < recognition.timestamps.size()
-                             ? recognition.timestamps[index + 1]
-                             : duration_seconds;
-      transcript_segments.push_back({
-          .id = "seg_" + [&] { std::ostringstream id; id << std::setw(4) << std::setfill('0') << index + 1; return id.str(); }(),
-          .start_seconds = start,
-          .end_seconds = std::max(start, end),
-          .speaker = speaker_for_range(diarization_segments, start, std::max(start, end)),
-          .text = recognition.tokens[index],
-      });
-    }
-  } else if (!recognition.text.empty()) {
-    transcript_segments.push_back({
-        .id = "seg_0001",
-        .start_seconds = 0,
-        .end_seconds = duration_seconds,
-        .speaker = speaker_for_range(diarization_segments, 0, duration_seconds),
-        .text = recognition.text,
-    });
+  for (auto& segment : transcript_segments) {
+    segment.speaker = speaker_for_range(diarization_segments,
+                                        segment.start_seconds, segment.end_seconds);
   }
 
   std::ostringstream model_manifest;
@@ -539,7 +594,7 @@ InferenceArtifacts run_local_inference(const std::filesystem::path& models,
                  << "    \"speaker_embedding_sha256\": \"" << sha256_file(embedding) << "\"";
 
   return {
-      .transcript_json = render_transcript_json(recognition.lang, transcript_segments),
+      .transcript_json = render_transcript_json(detected_language, transcript_segments),
       .diarization_json = render_diarization_json(diarization_segments),
       .speakers_yaml = render_speakers_yaml(diarization_segments),
       .manifest_json = model_manifest.str(),
@@ -579,9 +634,16 @@ void create_artifacts(const Options& options) {
         imported_audio, destination / "audio" / "normalized-16k-mono.wav");
     const std::string checksum = sha256_file(imported_audio);
     const std::string meeting_id = "meeting-" + created_at + "-" + checksum.substr(0, 8);
+    if (options.models_directory) {
+      validate_model_directory(*options.models_directory);
+    } else {
+      std::cerr << kName << ": warning: no --models directory was provided; "
+                << "transcript and diarization will be empty (status: not_processed).\n";
+    }
     const auto inference = options.models_directory
                                ? run_local_inference(*options.models_directory,
-                                                     destination / "audio" / "normalized-16k-mono.wav")
+                                                     destination / "audio" / "normalized-16k-mono.wav",
+                                                     destination / "audio" / "speakers")
                                : empty_inference_artifacts();
 
     std::ostringstream manifest;

@@ -9,10 +9,10 @@ project(
 
 option(MEETFLOW_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
 option(MEETFLOW_ENABLE_SHERPA_ONNX "Enable the native Sherpa-ONNX inference runtime" OFF)
-option(MEETFLOW_DOWNLOAD_MODELS "Download missing Sherpa-ONNX model files during configure" OFF)
+option(MEETFLOW_DOWNLOAD_MODELS "Download missing Sherpa-ONNX model files during configure" ON)
 set(MEETFLOW_SHERPA_ONNX_ROOT "" CACHE PATH
     "Sherpa-ONNX installation prefix containing include/ and lib/")
-set(MEETFLOW_MODELS_DIR "${CMAKE_BINARY_DIR}/models" CACHE PATH
+set(MEETFLOW_MODELS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/model" CACHE PATH
     "Local directory for MeetFlow model files")
 
 set(CMAKE_CXX_STANDARD 20)
@@ -37,6 +37,7 @@ if(MEETFLOW_ENABLE_SHERPA_ONNX)
     NAMES cxx-api.h
     HINTS
       "${MEETFLOW_SHERPA_ONNX_ROOT}/include"
+      "${MEETFLOW_SHERPA_ONNX_ROOT}/include/sherpa-onnx/c-api"
       "${MEETFLOW_SHERPA_ONNX_ROOT}/sherpa-onnx/c-api"
       "${MEETFLOW_SHERPA_ONNX_ROOT}/c-api"
     REQUIRED

@@ -69,14 +69,40 @@ cmake --build build --parallel
 
 For local transcription and speaker diarization, follow [the Sherpa-ONNX build guide](docs/build-sherpa-onnx.md), then configure MeetFlow with the native runtime and model downloads enabled:
 
+### Install Sherpa-ONNX inside this project
+
+The helper script automatically creates or uses the project-local `onnx/` source directory and installs the runtime into `.third_party/sherpa-onnx`:
+
+```sh
+./scripts/build-sherpa-onnx.sh
+```
+
+If `onnx/` does not exist, the script clones the pinned Sherpa-ONNX v1.13.8 source checkout. It then builds the shared C/C++ APIs and installs them locally. The source checkout, build products, and runtime are ignored by Git.
+
+Configure MeetFlow against that local installation:
+
 ```sh
 cmake -S . -B build-sherpa \
   -DMEETFLOW_ENABLE_SHERPA_ONNX=ON \
-  -DMEETFLOW_SHERPA_ONNX_ROOT="$HOME/Library/Application Support/MeetFlow/runtime/sherpa-onnx" \
-  -DMEETFLOW_DOWNLOAD_MODELS=ON \
-  -DMEETFLOW_MODELS_DIR="$HOME/Library/Application Support/MeetFlow/models"
+  -DMEETFLOW_SHERPA_ONNX_ROOT="$PWD/.third_party/sherpa-onnx" \
+  -DMEETFLOW_DOWNLOAD_MODELS=ON
 cmake --build build-sherpa --parallel
 ```
+
+### Use Sherpa-ONNX installed elsewhere
+
+Sherpa-ONNX does not need to be installed inside the repository. Point `MEETFLOW_SHERPA_ONNX_ROOT` at any installation containing `include/` and `lib/`:
+
+```sh
+cmake -S . -B build \
+  -DMEETFLOW_ENABLE_SHERPA_ONNX=ON \
+  -DMEETFLOW_SHERPA_ONNX_ROOT="$HOME/Library/Application Support/MeetFlow/runtime/sherpa-onnx" \
+  -DMEETFLOW_DOWNLOAD_MODELS=ON \
+  -DMEETFLOW_MODELS_DIR="$PWD/model"
+cmake --build build --parallel
+```
+
+The runtime directory should contain `include/sherpa-onnx/c-api/cxx-api.h`, `lib/libsherpa-onnx-cxx-api.dylib`, `lib/libsherpa-onnx-c-api.dylib`, and `lib/libonnxruntime.dylib` on macOS.
 
 Prepare an exported iPhone/Apple Notes recording. The original audio is preserved, while a normalized working copy and processing artifacts are created in the meeting directory:
 
@@ -84,7 +110,7 @@ Prepare an exported iPhone/Apple Notes recording. The original audio is preserve
 ./build-sherpa/bin/meetflow-prepare \
   "$HOME/Downloads/meeting.m4a" \
   --output "$PWD/meetflow-meetings/meeting-2026-09-13" \
-  --models "$HOME/Library/Application Support/MeetFlow/models"
+  --models "$PWD/model"
 ```
 
 If you are only testing the file-import and artifact pipeline without local inference, omit `--models` and use the regular `build/bin/meetflow-prepare` executable.
@@ -144,7 +170,10 @@ meeting-YYYY-MM-DD/
 │   └── action-items.yaml      # Candidate commitments for human review
 └── final/
     └── minutes.md             # Approved Markdown minutes
+
 ```
+
+With local inference enabled, `meetflow-prepare` also writes `audio/speakers/S1.wav`, `S2.wav`, and so on. Each file contains the audio grouped by anonymous diarized speaker, so you can listen to the clip while renaming the speaker in `speakers.yaml`.
 
 Transcript segments will use stable IDs, timestamps, an anonymous speaker ID, detected language, text, and confidence. The YAML review files reference those IDs rather than duplicating raw transcript content.
 

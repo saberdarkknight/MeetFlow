@@ -13,7 +13,18 @@ The runtime and its models are local dependencies. Do not add them to this Git r
 
 ## Build and install
 
-Choose a local location outside this repository. This example installs into `~/Library/Application Support/MeetFlow/runtime/sherpa-onnx`.
+MeetFlow can keep the Sherpa-ONNX source in the project-local `onnx/` directory and install only the runtime into `.third_party/`. Clone the source once, then run the helper script:
+
+```sh
+cd /Users/steve/code/MeetFlow
+git clone --depth 1 --branch v1.13.8 \
+  https://github.com/k2-fsa/sherpa-onnx.git onnx
+./scripts/build-sherpa-onnx.sh
+```
+
+The script builds `onnx/` and installs the runtime under `.third_party/sherpa-onnx`; both the source build directory and installed binaries are ignored by Git.
+
+Alternatively, you can install outside the repository, for example into `~/Library/Application Support/MeetFlow/runtime/sherpa-onnx`.
 
 ```sh
 git clone --depth 1 --branch v1.13.8 https://github.com/k2-fsa/sherpa-onnx.git ~/src/sherpa-onnx-v1.13.8

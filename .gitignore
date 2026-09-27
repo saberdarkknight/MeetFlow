@@ -3,6 +3,11 @@
 /build-*/
 /cmake-build-*/
 /models/
+/model/
+/onnx/build/
+/onnx/
+/.third_party/
+/Audio/
 
 # Default local meeting-data directory (may contain sensitive recordings)
 /meetflow-meetings/
