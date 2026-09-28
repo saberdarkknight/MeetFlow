@@ -1,7 +1,10 @@
 include_guard(GLOBAL)
 
+set(MEETFLOW_WHISPER_MODEL_SIZE "tiny" CACHE STRING
+    "Whisper model size to download (tiny, base, or small)")
+set_property(CACHE MEETFLOW_WHISPER_MODEL_SIZE PROPERTY STRINGS tiny base small)
 set(MEETFLOW_WHISPER_MODEL_URL
-    "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-tiny.tar.bz2"
+    "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-${MEETFLOW_WHISPER_MODEL_SIZE}.tar.bz2"
     CACHE STRING "URL for the multilingual Whisper model archive")
 set(MEETFLOW_DIARIZATION_SEGMENTATION_URL
     "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-segmentation-models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2"

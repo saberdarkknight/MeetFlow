@@ -85,9 +85,35 @@ Configure MeetFlow against that local installation:
 cmake -S . -B build-sherpa \
   -DMEETFLOW_ENABLE_SHERPA_ONNX=ON \
   -DMEETFLOW_SHERPA_ONNX_ROOT="$PWD/.third_party/sherpa-onnx" \
+  -DMEETFLOW_WHISPER_MODEL_SIZE=base \
   -DMEETFLOW_DOWNLOAD_MODELS=ON
 cmake --build build-sherpa --parallel
 ```
+
+You can run the same configuration and build through the helper script:
+
+```sh
+./scripts/build-meetflow.sh base
+```
+
+The model-size argument is optional and defaults to `small`. Each size is stored separately in `model/tiny`, `model/base`, or `model/small`; pass the matching directory to `--models`. Use `tiny` for faster processing or `base` for a faster middle ground:
+
+```sh
+./scripts/build-meetflow.sh tiny
+./scripts/build-meetflow.sh small
+```
+
+After building, prepare a recording with the helper script:
+
+```sh
+./scripts/prepare-meeting.sh \
+  Audio/meeting_0916.m4a \
+  build/output \
+  small \
+  6
+```
+
+Arguments are: audio file, output directory, model size, and maximum speakers. The output directory defaults to `build/output`, the model size defaults to `small`, and `0` means automatic speaker clustering.
 
 ### Use Sherpa-ONNX installed elsewhere
 
@@ -102,6 +128,8 @@ cmake -S . -B build \
 cmake --build build --parallel
 ```
 
+`MEETFLOW_WHISPER_MODEL_SIZE` supports `tiny`, `base`, and `small`. Larger models usually improve recognition quality but require more memory and processing time. When changing model size, use a new model directory or remove the previous Whisper files before configuring again.
+
 The runtime directory should contain `include/sherpa-onnx/c-api/cxx-api.h`, `lib/libsherpa-onnx-cxx-api.dylib`, `lib/libsherpa-onnx-c-api.dylib`, and `lib/libonnxruntime.dylib` on macOS.
 
 Prepare an exported iPhone/Apple Notes recording. The original audio is preserved, while a normalized working copy and processing artifacts are created in the meeting directory:
@@ -110,8 +138,11 @@ Prepare an exported iPhone/Apple Notes recording. The original audio is preserve
 ./build-sherpa/bin/meetflow-prepare \
   "$HOME/Downloads/meeting.m4a" \
   --output "$PWD/meetflow-meetings/meeting-2026-09-13" \
-  --models "$PWD/model"
+  --models "$PWD/model/base" \
+  --max-speakers 6
 ```
+
+`--max-speakers` is optional. Set it to the expected number of people in the room (for example, `6`) to force diarization to use that many speaker clusters. Leave it out, or use `0`, to let Sherpa-ONNX estimate the number automatically.
 
 If you are only testing the file-import and artifact pipeline without local inference, omit `--models` and use the regular `build/bin/meetflow-prepare` executable.
 

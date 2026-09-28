@@ -33,6 +33,7 @@ struct Options {
   std::filesystem::path audio_file;
   std::filesystem::path output_directory;
   std::optional<std::filesystem::path> models_directory;
+  int max_speakers = 0;
 };
 
 void print_usage() {
@@ -44,7 +45,8 @@ void print_usage() {
             << "Without --output, artifacts are created under "
                "./meetflow-meetings/meeting-<UTC timestamp>.\n"
             << "\n"
-            << "--models enables local ASR and speaker diarization. See docs/local-inference.md.\n";
+            << "--models enables local ASR and speaker diarization. See docs/local-inference.md.\n"
+            << "--max-speakers N sets the expected number of meeting speakers (0 = automatic).\n";
 }
 
 std::optional<Options> parse_options(int argc, char* argv[]) {
@@ -67,6 +69,12 @@ std::optional<Options> parse_options(int argc, char* argv[]) {
         throw std::runtime_error("--models requires a directory path");
       }
       options.models_directory = std::filesystem::path{argv[index]};
+      continue;
+    }
+    if (argument == "--max-speakers") {
+      if (++index == argc) throw std::runtime_error("--max-speakers requires a positive integer");
+      options.max_speakers = std::stoi(argv[index]);
+      if (options.max_speakers < 0) throw std::runtime_error("--max-speakers must be zero or greater");
       continue;
     }
     throw std::runtime_error("unknown argument: " + std::string{argument});
@@ -502,7 +510,8 @@ std::string json_number(double value) {
 
 InferenceArtifacts run_local_inference(const std::filesystem::path& models,
                                       const std::filesystem::path& normalized_audio,
-                                      const std::filesystem::path& speaker_audio_directory) {
+                                      const std::filesystem::path& speaker_audio_directory,
+                                      int max_speakers) {
   const auto whisper_encoder = required_model_file(models, "whisper/encoder.int8.onnx");
   const auto whisper_decoder = required_model_file(models, "whisper/decoder.int8.onnx");
   const auto whisper_tokens = required_model_file(models, "whisper/tokens.txt");
@@ -537,6 +546,13 @@ InferenceArtifacts run_local_inference(const std::filesystem::path& models,
   std::size_t segment_number = 1;
   for (std::size_t offset = 0; offset < wave.samples.size(); offset += chunk_samples) {
     const std::size_t sample_count = std::min(chunk_samples, wave.samples.size() - offset);
+    const auto chunk_number = offset / chunk_samples + 1;
+    const auto total_chunks = (wave.samples.size() + chunk_samples - 1) / chunk_samples;
+    std::cerr << kName << ": transcribing chunk " << chunk_number << "/" << total_chunks
+              << " (" << std::fixed << std::setprecision(1)
+              << static_cast<double>(offset) / wave.sample_rate << "-"
+              << static_cast<double>(offset + sample_count) / wave.sample_rate
+              << " seconds)\n";
     auto stream = recognizer.CreateStream();
     stream.AcceptWaveform(wave.sample_rate, wave.samples.data() + offset,
                           static_cast<int32_t>(sample_count));
@@ -557,14 +573,20 @@ InferenceArtifacts run_local_inference(const std::filesystem::path& models,
   }
 
   sherpa_onnx::cxx::OfflineSpeakerDiarizationConfig diarization_config;
+  std::cerr << kName << ": starting speaker diarization for "
+            << std::fixed << std::setprecision(1)
+            << static_cast<double>(wave.samples.size()) / wave.sample_rate << " seconds\n";
   diarization_config.segmentation.pyannote.model = segmentation.string();
   diarization_config.segmentation.num_threads = 4;
   diarization_config.embedding.model = embedding.string();
   diarization_config.embedding.num_threads = 4;
   diarization_config.clustering.compute_confidence = true;
+  diarization_config.clustering.num_clusters = max_speakers;
   auto diarizer = sherpa_onnx::cxx::OfflineSpeakerDiarization::Create(diarization_config);
   const auto diarization_result = diarizer.Process(
       wave.samples.data(), static_cast<int32_t>(wave.samples.size()));
+  std::cerr << kName << ": speaker diarization complete ("
+            << diarization_result.size() << " segments)\n";
 
   std::vector<DiarizationSegment> diarization_segments;
   diarization_segments.reserve(diarization_result.size());
@@ -602,7 +624,9 @@ InferenceArtifacts run_local_inference(const std::filesystem::path& models,
 }
 #else
 InferenceArtifacts run_local_inference(const std::filesystem::path&,
-                                      const std::filesystem::path&) {
+                                      const std::filesystem::path&,
+                                      const std::filesystem::path&,
+                                      int) {
   throw std::runtime_error(
       "this build does not include Sherpa-ONNX; configure with MEETFLOW_ENABLE_SHERPA_ONNX=ON");
 }
@@ -643,7 +667,8 @@ void create_artifacts(const Options& options) {
     const auto inference = options.models_directory
                                ? run_local_inference(*options.models_directory,
                                                      destination / "audio" / "normalized-16k-mono.wav",
-                                                     destination / "audio" / "speakers")
+                                                     destination / "audio" / "speakers",
+                                                     options.max_speakers)
                                : empty_inference_artifacts();
 
     std::ostringstream manifest;
